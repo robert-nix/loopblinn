@@ -146,7 +146,6 @@ func loadGlyph(r rune) {
 			i++
 		}
 		loop = append(loop[loopStartI:], loop[:loopStartI]...)
-		fmt.Println("new loop")
 		if len(loop) > 1 {
 			g.loops = append(g.loops, loop)
 		}
@@ -165,8 +164,6 @@ func loadGlyph(r rune) {
 	xMax += width * 0.05
 	yMin -= height * 0.05
 	yMax += height * 0.05
-	fmt.Println("bounds", xMin, xMax, yMin, yMax)
-	dt := cdt.NewTriangulation(xMin, xMax, yMin, yMax)
 	// define points and bezier triangles:
 	glyphMesh = GlyphMesh{}
 	positions := make([]float32, 0)
@@ -176,12 +173,10 @@ func loadGlyph(r rune) {
 	addVert := func(x, y float32, uv int8) {
 		positions = append(positions, x, y)
 		uvs = append(uvs, uv)
-		fmt.Println("v", x, y, uv)
 	}
 	n := int16(0)
 	addIndex := func(idx int16) {
 		indices = append(indices, idx)
-		fmt.Println("i", idx)
 		n++
 	}
 	addLine := func(a, b int16) {
@@ -220,9 +215,6 @@ func loadGlyph(r rune) {
 				}
 				addVert(x, y, uvBeginConvex)
 			} else {
-				if first {
-					panic("NYI: rewind the loop to start with an 'on' point")
-				}
 				if !prevOn {
 					// gen midpoint
 					midX := (x + prevX) / 2
@@ -263,75 +255,8 @@ func loadGlyph(r rune) {
 	fmt.Println("nVertices:", len(positions)/2)
 	fmt.Println("nIndices:", len(indices))
 
-	// now we must create a proper tessellation of the graph, using constrained
-	// Delauney triangulation
-	//
-	// for the graph's initial state, we use the 10% enlarged bounds from
-	// earlier:
-	/*
-		traceIdx := 0
-		trace := func(triOfInterest int, fatal bool) {
-			if !fatal {
-				return
-			}
-			r := raster.NewRasterizer(1024, 1024)
-			r.UseNonZeroWinding = true
-			img := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
-			p := raster.NewRGBAPainter(img)
-			for n := 0; n < len(dt.Triangles); n += 3 {
-				c := colorList[(n/3)%len(colorList)]
-				p.SetColor(color.RGBA{uint8(c[0]), uint8(c[1]), uint8(c[2]), 255})
-				p0 := dt.Verts[dt.Triangles[n+0]]
-				p1 := dt.Verts[dt.Triangles[n+1]]
-				p2 := dt.Verts[dt.Triangles[n+2]]
-				pa := raster.Path{}
-				pa.Start(raster.Point{
-					raster.Fix32(int((0.1 + p0[0]) * 256 * 1200)),
-					raster.Fix32(256000 - int((0.3+p0[1])*256*1200))})
-				pa.Add1(raster.Point{
-					raster.Fix32(int((0.1 + p1[0]) * 256 * 1200)),
-					raster.Fix32(256000 - int((0.3+p1[1])*256*1200))})
-				pa.Add1(raster.Point{
-					raster.Fix32(int((0.1 + p2[0]) * 256 * 1200)),
-					raster.Fix32(256000 - int((0.3+p2[1])*256*1200))})
-				pa.Add1(raster.Point{
-					raster.Fix32(int((0.1 + p0[0]) * 256 * 1200)),
-					raster.Fix32(256000 - int((0.3+p0[1])*256*1200))})
-				nw := raster.Fix32(256)
-				if n == triOfInterest {
-					nw = 1024
-				}
-				r.AddStroke(pa, nw, nil, nil)
-				r.Rasterize(p)
-				r.Clear()
-				mp := p0.Add(p1).Add(p2).Mul(1.0 / 3.0)
-				mpX := raster.Fix32(int((0.1 + mp[0]) * 256 * 1200))
-				mpY := raster.Fix32(256000 - int((0.3+mp[1])*256*1200))
-				r.Start(raster.Point{mpX, mpY + 256})
-				r.Add2(
-					raster.Point{mpX + 256, mpY + 256},
-					raster.Point{mpX + 256, mpY})
-				r.Add2(
-					raster.Point{mpX + 256, mpY - 256},
-					raster.Point{mpX, mpY - 256})
-				r.Add2(
-					raster.Point{mpX - 256, mpY - 256},
-					raster.Point{mpX - 256, mpY})
-				r.Add2(
-					raster.Point{mpX - 256, mpY + 256},
-					raster.Point{mpX, mpY + 256})
-				r.Rasterize(p)
-				r.Clear()
-			}
-			outFile, err := os.Create(fmt.Sprintf("trace_%03d.png", traceIdx))
-			traceIdx++
-			if err != nil {
-				panic(err)
-			}
-			png.Encode(outFile, img)
-			outFile.Close()
-		}
-	*/
+	// tessellate the glyph with CDT:
+	dt := cdt.NewTriangulation(xMin, xMax, yMin, yMax)
 	srcToDtIs := []int{}
 	for i := 0; i < len(positions); i += 2 {
 		dtI := dt.AddPoint(positions[i+0], positions[i+1])
@@ -466,9 +391,6 @@ func loadGlyph(r rune) {
 					}
 					curPts = append(curPts, mgl32.Vec2{x, y})
 				} else {
-					if first {
-						panic("NYI: rewind the loop to start with an 'on' point")
-					}
 					if !prevOn {
 						// gen midpoint
 						midX := (x + prevX) / 2
@@ -555,7 +477,6 @@ func loadGlyph(r rune) {
 			}
 		}
 		splineTriangleIs = append(splineTriangleIs, triI)
-		fmt.Println(srcIs)
 		// ...
 		for _, n := range srcIs {
 			idx := int(indices[i+n])
@@ -586,7 +507,6 @@ func loadGlyph(r rune) {
 		p1 := dt.Verts[dt.Triangles[i+1]]
 		p2 := dt.Verts[dt.Triangles[i+2]]
 		mp := p0.Add(p1).Add(p2).Mul(float32(1) / float32(3))
-		fmt.Println("mp", mp, "p012", p0, p1, p2)
 		uv := int8(uvExterior)
 		if pointInGlyph(mp) {
 			uv = uvInterior
@@ -611,9 +531,6 @@ func loadGlyph(r rune) {
 			glyphMesh.indices = append(glyphMesh.indices, int16(dstVertI))
 		}
 	}
-	fmt.Println(splineTriangleIs)
-	fmt.Println(len(glyphMesh.positions), len(glyphMesh.uvs), glyphMesh.indices)
-	fmt.Println(glyphMesh.uvs)
 	fmt.Println("point in glyph?", pointInGlyph(mgl32.Vec2{testX, testY}))
 	glyphMesh.positions = append(glyphMesh.positions,
 		testX, testY,
@@ -625,32 +542,6 @@ func loadGlyph(r rune) {
 		int16(len(glyphMesh.positions)/2-3),
 		int16(len(glyphMesh.positions)/2-2),
 		int16(len(glyphMesh.positions)/2-1))
-}
-
-func getBarycentric(p, a, b, c mgl32.Vec2) (float32, float32) {
-	v0 := c.Sub(a)
-	v1 := b.Sub(a)
-	v2 := p.Sub(a)
-	dot00 := v0.Dot(v0)
-	dot01 := v0.Dot(v1)
-	dot02 := v0.Dot(v2)
-	dot11 := v1.Dot(v1)
-	dot12 := v1.Dot(v2)
-	norm := 1 / (dot00*dot11 - dot01*dot01)
-	u := (dot11*dot02 - dot01*dot12) * norm
-	v := (dot00*dot12 - dot01*dot02) * norm
-	return u, v
-}
-
-func pointInTriangle(p, a, b, c mgl32.Vec2) bool {
-	u, v := getBarycentric(p, a, b, c)
-	// all those dot products really accumulate the rounding error!
-	return u >= -1e-6 && v >= -1e-6 && u+v-1 < 1e-6
-}
-
-func pointInAngle(p, a, b, c mgl32.Vec2) bool {
-	u, v := getBarycentric(p, a, b, c)
-	return u >= -1e-6 && v >= -1e-6
 }
 
 var prog uint32
