@@ -4,9 +4,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	// "image"
-	// "image/color"
-	// "image/png"
 	"io/ioutil"
 	"log"
 	"math"
@@ -18,10 +15,9 @@ import (
 	"github.com/go-gl/glfw/v3.1/glfw"
 	"github.com/go-gl/mathgl/mgl32"
 
-	// "code.google.com/p/freetype-go/freetype/raster"
 	"code.google.com/p/freetype-go/freetype/truetype"
 
-	"./cdt"
+	"github.com/Mischanix/loopblinn/cdt"
 )
 
 func init() {
