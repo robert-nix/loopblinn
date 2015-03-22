@@ -532,21 +532,21 @@ func getBarycentric(p, a, b, c mgl32.Vec2) (float32, float32) {
 	dot02 := v0.Dot(v2)
 	dot11 := v1.Dot(v1)
 	dot12 := v1.Dot(v2)
-	norm := 1 / (dot00*dot11 - dot01*dot01)
-	u := (dot11*dot02 - dot01*dot12) * norm
-	v := (dot00*dot12 - dot01*dot02) * norm
+	norm := (dot00*dot11 - dot01*dot01)
+	u := (dot11*dot02 - dot01*dot12) / norm
+	v := (dot00*dot12 - dot01*dot02) / norm
 	return u, v
 }
 
 // pointInTriangle returns true if p is inside the triangle abc
 func pointInTriangle(p, a, b, c mgl32.Vec2) bool {
 	u, v := getBarycentric(p, a, b, c)
-	// all those dot products really accumulate the rounding error!
-	return u >= -1e-6 && v >= -1e-6 && u+v-1 < 1e-6
+	// todo: math around rounding error better
+	return u >= -4e-6 && v >= -4e-6 && u+v < 1.0000076
 }
 
 // pointInAngle returns true if p is inside the angle defined by lines ab and ac
 func pointInAngle(p, a, b, c mgl32.Vec2) bool {
 	u, v := getBarycentric(p, a, b, c)
-	return u >= -1e-6 && v >= -1e-6
+	return u >= -4e-6 && v >= -4e-6
 }

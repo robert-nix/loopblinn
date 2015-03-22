@@ -135,6 +135,7 @@ func loadGlyph(r rune) {
 			on := 0 != (p.Flags & 1)
 			fmt.Println("pt", i, x, y, on)
 			if on && !foundStartPoint {
+				foundStartPoint = true
 				loopStartI = loopI
 			}
 			loop = append(loop, point{x, y, on})
@@ -189,10 +190,9 @@ func loadGlyph(r rune) {
 		prevOn := true
 		var x, y float32
 		for _, pt := range loop {
-			x := pt.x
-			y := pt.y
+			x = pt.x
+			y = pt.y
 			on := pt.on
-			fmt.Println("pt", i, x, y, on)
 			if on {
 				// on => 0,0 / 1,1 uv
 				if !first {
@@ -238,18 +238,17 @@ func loadGlyph(r rune) {
 			prevOn = on
 		}
 		if !prevOn {
-			fmt.Println("closing loop?")
+			// close loop by finalizing the last bezier:
 			addVert(firstX, firstY, uvEndConvex)
 			addIndex(n)
 		} else {
+			// close loop with a line, if necessary:
 			if x != firstX || y != firstY {
 				addLine(n, firstI)
 			}
 			n++
 		}
 	}
-	fmt.Println("nVertices:", len(positions)/2)
-	fmt.Println("nIndices:", len(indices))
 
 	// tessellate the glyph with CDT:
 	dt := cdt.NewTriangulation(xMin, xMax, yMin, yMax)
@@ -258,10 +257,7 @@ func loadGlyph(r rune) {
 		dtI := dt.AddPoint(positions[i+0], positions[i+1])
 		srcToDtIs = append(srcToDtIs, dtI)
 	}
-	fmt.Println("making edges", indices, srcToDtIs)
-	fmt.Println("lines", lines)
 	for i := 0; i < len(indices); i += 3 {
-		fmt.Println("force tri:", indices[i:i+3])
 		dt.AddEdge(srcToDtIs[int(indices[i+0])], srcToDtIs[int(indices[i+1])])
 		dt.AddEdge(srcToDtIs[int(indices[i+1])], srcToDtIs[int(indices[i+2])])
 		dt.AddEdge(srcToDtIs[int(indices[i+2])], srcToDtIs[int(indices[i+0])])
@@ -269,73 +265,67 @@ func loadGlyph(r rune) {
 	for i := 0; i < len(lines); i += 2 {
 		dt.AddEdge(srcToDtIs[int(lines[i])], srcToDtIs[int(lines[i+1])])
 	}
-	fmt.Println("lines", lines)
-	testX := float32(0.40400696)
-	testY := float32(0.65600586)
+
+	// determine whether a given point is in or outside the glyph shape
 	pointInGlyph := func(q mgl32.Vec2) bool {
 		xs := []float32{}
+		mpxs := []float32{} // used as a tiebreaker
 		interiors := []bool{}
 		intersectQuad := func(p0, p1, p2 mgl32.Vec2) {
 			a := p0[1]
 			b := p1[1]
 			c := p2[1]
 			y := q[1]
-			t0 := float32(0)
-			t1 := float32(0)
-			if !mgl32.FloatEqual(a-2*b+c, 0) {
-				det := float32(math.Sqrt(float64(-a*c + a*y + b*b - 2*b*y + c*y)))
-				denom := -a + 2*b - c
-				t0 = (-det - a + b) / denom
-				t1 = (det - a + b) / denom
-			} else if mgl32.FloatEqual(a, 2*b-c) && !mgl32.FloatEqual(b-c, 0) {
-				// tangent
-				t0 = (2*b - c - y) / (2 * (b - c))
-				t1 = -1 // substitute for -Inf
-			} else {
-				// straight colinear line
+			ts := [2]float32{-1, -1}
+			if a == c && b == y {
+				// undefined
 				return
-			}
-			if q[0] == testX && q[1] == testY {
-				fmt.Println("q:", q, "p0,1,2:", p0, p1, p2, "ts:", t0, t1)
-			}
-			if t0 >= 0 && t0 <= 1 {
-				// get x for t:
-				x := (1-t0)*((1-t0)*p0[0]+t0*p1[0]) + t0*((1-t0)*p1[0]+t0*p2[0])
-				if x < q[0] {
-					fmt.Println("left x goto:", x)
-					goto lt1
-				}
-				fmt.Println("quad t0:", t0, "x:", x)
-				xs = append(xs, x)
-				// to determine interiority, we need the vector derivative of
-				// the bezier at t:
-				dB := p1.Sub(p0).Mul(2 * (1 - t0)).Add(p2.Sub(p1).Mul(2 * t0))
-				// also need det([[p2 - p0] [p1 - p0]])
-				if dB[1] > 0 {
-					fmt.Println("q is exterior")
-					interiors = append(interiors, false)
-				} else {
-					fmt.Println("q is interior")
-					interiors = append(interiors, true)
-				}
-			}
-		lt1:
-			if t1 >= 0 && t1 <= 1 {
-				x := (1-t1)*((1-t1)*p0[0]+t1*p1[0]) + t1*((1-t1)*p1[0]+t1*p2[0])
-				if x < q[0] {
-					fmt.Println("left x:", x)
+			} else if a == b && c == y {
+				ts[0] = 1
+				ts[1] = -1
+			} else if a == y && b == c {
+				ts[0] = 2
+				ts[1] = 0
+			} else if denom := (a - b) + (c - b); !mgl32.FloatEqual(denom, 0) {
+				det := (b-y)*(b-y) + y*(c+a-y) - a*c
+				if det < 0 {
+					// paraboloid never intersects:
 					return
 				}
-				fmt.Println("quad t1:", t1, "x:", x)
-				xs = append(xs, x)
-				dB := p1.Sub(p0).Mul(2 * (1 - t1)).Add(p2.Sub(p1).Mul(2 * t1))
-				if dB[1] > 0 {
-					fmt.Println("q is exterior")
-					interiors = append(interiors, false)
-				} else {
-					fmt.Println("q is interior")
-					interiors = append(interiors, true)
+				root := float32(math.Sqrt(float64(det)))
+				ts[0] = (root + a - b) / denom
+				ts[1] = (-root + a - b) / denom
+			} else if !mgl32.FloatEqual(b-c, 0) {
+				// quadratic has only one intersection with x = k:
+				ts[0] = (2*b - c - y) / (2 * (b - c))
+			} else {
+				// shouldn't reach here
+				return
+			}
+			for _, t := range ts {
+				if t < 0 || t > 1 {
+					continue
 				}
+				// get x for t:
+				x := (1-t)*((1-t)*p0[0]+t*p1[0]) + t*((1-t)*p1[0]+t*p2[0])
+				mpx := 0.25*p0[0] + 0.5*p1[0] + 0.25*p2[0]
+				if x < q[0] {
+					continue
+				}
+				// to determine interiority, we need the vector derivative of
+				// the bezier at t:
+				dB := p1.Sub(p0).Mul(2 * (1 - t)).Add(p2.Sub(p1).Mul(2 * t))
+				if dB[1] > 0 {
+					// q is exterior
+					xs = append(xs, x)
+					mpxs = append(mpxs, mpx)
+					interiors = append(interiors, false)
+				} else if dB[1] < 0 {
+					// q is interior
+					xs = append(xs, x)
+					mpxs = append(mpxs, mpx)
+					interiors = append(interiors, true)
+				} // otherwise, y = 0 => doesn't matter
 			}
 		}
 		intersectLinear := func(p0, p1 mgl32.Vec2) {
@@ -349,13 +339,14 @@ func loadGlyph(r rune) {
 				if x < q[0] {
 					return
 				}
-				fmt.Println("linear t:", t, "x:", x)
+				mpx := 0.5*p0[0] + 0.5*p1[0]
 				xs = append(xs, x)
+				mpxs = append(mpxs, mpx)
 				if p0[1] < p1[1] {
-					fmt.Println("q is exterior")
+					// q is exterior
 					interiors = append(interiors, false)
 				} else {
-					fmt.Println("q is interior")
+					// q is interior
 					interiors = append(interiors, true)
 				}
 			}
@@ -415,14 +406,15 @@ func loadGlyph(r rune) {
 			}
 		}
 		xMin := float32(math.MaxFloat32)
+		mpxMin := float32(math.MaxFloat32)
 		result := false
 		for i := 0; i < len(xs); i++ {
-			if xs[i] < xMin {
+			if xs[i] < xMin || (xs[i] == xMin && mpxs[i] < mpxMin) {
 				xMin = xs[i]
+				mpxMin = mpxs[i]
 				result = interiors[i]
 			}
 		}
-		fmt.Println("q:", q, "in?", result)
 		return result
 	}
 	// to build final mesh:
@@ -507,7 +499,6 @@ func loadGlyph(r rune) {
 		if pointInGlyph(mp) {
 			uv = uvInterior
 		}
-		// uv = int8((i / 3) % 20)
 		ps := []mgl32.Vec2{p0, p1, p2}
 		for _, p := range ps {
 			dstVertI := -1
@@ -527,17 +518,8 @@ func loadGlyph(r rune) {
 			glyphMesh.indices = append(glyphMesh.indices, int16(dstVertI))
 		}
 	}
-	fmt.Println("point in glyph?", pointInGlyph(mgl32.Vec2{testX, testY}))
-	glyphMesh.positions = append(glyphMesh.positions,
-		testX, testY,
-		testX, testY+0.004,
-		testX+1, testY)
-	glyphMesh.uvs = append(glyphMesh.uvs,
-		uvMidConvex, uvMidConvex, uvMidConvex)
-	glyphMesh.indices = append(glyphMesh.indices,
-		int16(len(glyphMesh.positions)/2-3),
-		int16(len(glyphMesh.positions)/2-2),
-		int16(len(glyphMesh.positions)/2-1))
+
+	fmt.Println("test point:", pointInGlyph(mgl32.Vec2{0.27, 0.71900177}))
 }
 
 var prog uint32
@@ -624,13 +606,7 @@ func onCursorPos(w *glfw.Window, xpos, ypos float64) {
 	mouseCoord = mgl32.Vec2{float32(xpos / 1280), float32(1 - ypos/720)}
 	mouseCoord = mouseCoord.Mul(2).Sub(mgl32.Vec2{1, 1})
 	mouseCoord = invTransform.Mul4x1(mouseCoord.Vec4(0, 1)).Vec2()
-	dTI := len(glyphMesh.positions) - 6
-	glyphMesh.positions[dTI] = mouseCoord[0]
-	glyphMesh.positions[dTI+1] = mouseCoord[1]
-	glyphMesh.positions[dTI+2] = mouseCoord[0]
-	glyphMesh.positions[dTI+3] = mouseCoord[1] + 0.004
-	glyphMesh.positions[dTI+4] = mouseCoord[0] + 1
-	glyphMesh.positions[dTI+5] = mouseCoord[1]
+	fmt.Println(mouseCoord)
 	bindBuffers()
 }
 
@@ -747,7 +723,7 @@ in int uvI;
 out vec3 texCoord;
 
 void main() {
-	const vec3 uvs[20] = vec3[20](
+	const vec3 uvs[8] = vec3[8](
 		vec3(0.0, 0.0, 1.0),
 		vec3(0.5, 0.0, 1.0),
 		vec3(1.0, 1.0, 1.0),
@@ -755,19 +731,7 @@ void main() {
 		vec3(0.5, 0.0, 0.0),
 		vec3(1.0, 1.0, 0.0),
 		vec3(1.0, 0.0, 1.0),
-		vec3(0.0, 1.0, 1.0),
-		vec3(0.000000, 0.462745, 1.000000),
-		vec3(0.835294, 1.000000, 0.000000),
-		vec3(1.000000, 0.576471, 0.494118),
-		vec3(0.415686, 0.509804, 0.423529),
-		vec3(1.000000, 0.007843, 0.615686),
-		vec3(0.996078, 0.537255, 0.000000),
-		vec3(0.478431, 0.278431, 0.509804),
-		vec3(0.494118, 0.176471, 0.823529),
-		vec3(0.521569, 0.662745, 0.000000),
-		vec3(1.000000, 0.000000, 0.337255),
-		vec3(0.643137, 0.141176, 0.000000),
-		vec3(0.000000, 0.682353, 0.494118));
+		vec3(0.0, 1.0, 1.0));
 	texCoord = vec3(uvs[uvI]);
 	gl_Position = transform * vec4(pos, 0.0, 1.0);
 }
@@ -787,72 +751,6 @@ void main() {
 	float fy = (2.0*texCoord.x)*py.x - py.y;
 	float sd = (texCoord.x*texCoord.x - texCoord.y)/sqrt(fx*fx + fy*fy);
 	float alpha = clamp(0.5 - (2.0 * texCoord.z - 1.0) * sd, 0.0, 1.0);
-	color = vec4(texCoord, 1.0);
+	color = vec4(0.0, 0.0, 0.0, alpha);
 }
 ` + "\x00"
-
-var colorList []mgl32.Vec3 = []mgl32.Vec3{
-	mgl32.Vec3{0x00, 0xFF, 0x00},
-	mgl32.Vec3{0x00, 0x00, 0xFF},
-	mgl32.Vec3{0xFF, 0x00, 0x00},
-	mgl32.Vec3{0x01, 0xFF, 0xFE},
-	mgl32.Vec3{0xFF, 0xA6, 0xFE},
-	mgl32.Vec3{0xFF, 0xDB, 0x66},
-	mgl32.Vec3{0x00, 0x64, 0x01},
-	mgl32.Vec3{0x01, 0x00, 0x67},
-	mgl32.Vec3{0x95, 0x00, 0x3A},
-	mgl32.Vec3{0x00, 0x7D, 0xB5},
-	mgl32.Vec3{0xFF, 0x00, 0xF6},
-	mgl32.Vec3{0xFF, 0xEE, 0xE8},
-	mgl32.Vec3{0x77, 0x4D, 0x00},
-	mgl32.Vec3{0x90, 0xFB, 0x92},
-	mgl32.Vec3{0x00, 0x76, 0xFF},
-	mgl32.Vec3{0xD5, 0xFF, 0x00},
-	mgl32.Vec3{0xFF, 0x93, 0x7E},
-	mgl32.Vec3{0x6A, 0x82, 0x6C},
-	mgl32.Vec3{0xFF, 0x02, 0x9D},
-	mgl32.Vec3{0xFE, 0x89, 0x00},
-	mgl32.Vec3{0x7A, 0x47, 0x82},
-	mgl32.Vec3{0x7E, 0x2D, 0xD2},
-	mgl32.Vec3{0x85, 0xA9, 0x00},
-	mgl32.Vec3{0xFF, 0x00, 0x56},
-	mgl32.Vec3{0xA4, 0x24, 0x00},
-	mgl32.Vec3{0x00, 0xAE, 0x7E},
-	mgl32.Vec3{0x68, 0x3D, 0x3B},
-	mgl32.Vec3{0xBD, 0xC6, 0xFF},
-	mgl32.Vec3{0x26, 0x34, 0x00},
-	mgl32.Vec3{0xBD, 0xD3, 0x93},
-	mgl32.Vec3{0x00, 0xB9, 0x17},
-	mgl32.Vec3{0x9E, 0x00, 0x8E},
-	mgl32.Vec3{0x00, 0x15, 0x44},
-	mgl32.Vec3{0xC2, 0x8C, 0x9F},
-	mgl32.Vec3{0xFF, 0x74, 0xA3},
-	mgl32.Vec3{0x01, 0xD0, 0xFF},
-	mgl32.Vec3{0x00, 0x47, 0x54},
-	mgl32.Vec3{0xE5, 0x6F, 0xFE},
-	mgl32.Vec3{0x78, 0x82, 0x31},
-	mgl32.Vec3{0x0E, 0x4C, 0xA1},
-	mgl32.Vec3{0x91, 0xD0, 0xCB},
-	mgl32.Vec3{0xBE, 0x99, 0x70},
-	mgl32.Vec3{0x96, 0x8A, 0xE8},
-	mgl32.Vec3{0xBB, 0x88, 0x00},
-	mgl32.Vec3{0x43, 0x00, 0x2C},
-	mgl32.Vec3{0xDE, 0xFF, 0x74},
-	mgl32.Vec3{0x00, 0xFF, 0xC6},
-	mgl32.Vec3{0xFF, 0xE5, 0x02},
-	mgl32.Vec3{0x62, 0x0E, 0x00},
-	mgl32.Vec3{0x00, 0x8F, 0x9C},
-	mgl32.Vec3{0x98, 0xFF, 0x52},
-	mgl32.Vec3{0x75, 0x44, 0xB1},
-	mgl32.Vec3{0xB5, 0x00, 0xFF},
-	mgl32.Vec3{0x00, 0xFF, 0x78},
-	mgl32.Vec3{0xFF, 0x6E, 0x41},
-	mgl32.Vec3{0x00, 0x5F, 0x39},
-	mgl32.Vec3{0x6B, 0x68, 0x82},
-	mgl32.Vec3{0x5F, 0xAD, 0x4E},
-	mgl32.Vec3{0xA7, 0x57, 0x40},
-	mgl32.Vec3{0xA5, 0xFF, 0xD2},
-	mgl32.Vec3{0xFF, 0xB1, 0x67},
-	mgl32.Vec3{0x00, 0x9B, 0xFF},
-	mgl32.Vec3{0xE8, 0x5E, 0xBE},
-}
