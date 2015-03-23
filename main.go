@@ -760,7 +760,7 @@ void main() {
 	vec2 py = dFdy(texCoord.xy);
 	float fx = (2.0*texCoord.x)*px.x - px.y;
 	float fy = (2.0*texCoord.x)*py.x - py.y;
-	float sd = (texCoord.x*texCoord.x - texCoord.y)/sqrt(fx*fx + fy*fy);
+	float sd = (texCoord.x*texCoord.x - texCoord.y)/max(sqrt(fx*fx + fy*fy), 1e-7);
 	float alpha = clamp(0.5 - (2.0 * texCoord.z - 1.0) * sd, 0.0, 1.0);
 	color = vec4(0.0, 0.0, 0.0, alpha);
 }
