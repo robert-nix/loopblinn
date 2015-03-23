@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/davecheney/profile"
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"github.com/go-gl/glfw/v3.1/glfw"
 	"github.com/go-gl/mathgl/mgl32"
@@ -109,7 +110,6 @@ func loadGlyph(r rune) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(glyph.Point)
 
 	// preprocessing
 	type point struct {
@@ -121,7 +121,6 @@ func loadGlyph(r rune) {
 	}
 	g := glyphInfo{}
 	i := 0
-	fmt.Println(glyph.End)
 	for _, end := range glyph.End {
 		loop := []point{}
 		loopI := 0
@@ -133,7 +132,6 @@ func loadGlyph(r rune) {
 			x := float32(p.X) / 65536
 			y := float32(p.Y) / 65536
 			on := 0 != (p.Flags & 1)
-			fmt.Println("pt", i, x, y, on)
 			if on && !foundStartPoint {
 				foundStartPoint = true
 				loopStartI = loopI
@@ -179,7 +177,6 @@ func loadGlyph(r rune) {
 	addLine := func(a, b int16) {
 		lines = append(lines, a, b)
 	}
-	fmt.Println(g)
 	for _, loop := range g.loops {
 		first := true
 		firstI := int16(-1)
@@ -251,7 +248,7 @@ func loadGlyph(r rune) {
 	}
 
 	// tessellate the glyph with CDT:
-	dt := cdt.NewTriangulation(xMin, xMax, yMin, yMax)
+	dt := cdt.NewTriangulation(xMin, xMax, yMin, yMax, len(positions)/2)
 	srcToDtIs := []int{}
 	for i := 0; i < len(positions); i += 2 {
 		dtI := dt.AddPoint(positions[i+0], positions[i+1])
@@ -433,7 +430,7 @@ func loadGlyph(r rune) {
 		triI := -1
 		srcIs := []int{}
 		concave := false
-		for j := 0; j < len(dt.Triangles); j += 3 {
+		for j := 0; j < dt.TriangleI; j += 3 {
 			triI = j
 			if dtVI0 == dt.Triangles[j] {
 				if dtVI1 == dt.Triangles[j+1] && dtVI2 == dt.Triangles[j+2] {
@@ -480,7 +477,7 @@ func loadGlyph(r rune) {
 			glyphMesh.indices = append(glyphMesh.indices, int16(dstVertI))
 		}
 	}
-	for i := 0; i < len(dt.Triangles); i += 3 {
+	for i := 0; i < dt.TriangleI; i += 3 {
 		isSpline := false
 		for _, j := range splineTriangleIs {
 			if j == i {
@@ -518,8 +515,6 @@ func loadGlyph(r rune) {
 			glyphMesh.indices = append(glyphMesh.indices, int16(dstVertI))
 		}
 	}
-
-	fmt.Println("test point:", pointInGlyph(mgl32.Vec2{0.27, 0.71900177}))
 }
 
 var prog uint32
@@ -594,10 +589,12 @@ func onKey(w *glfw.Window, k glfw.Key, scancode int,
 	if 0 == (mods & glfw.ModShift) {
 		lowercase = 0x20
 	}
-	r := rune(int(k) | lowercase)
-	loadGlyph(r)
-	fmt.Println("rune is now:", string(r))
-	bindBuffers()
+	if action == glfw.Press {
+		r := rune(int(k) | lowercase)
+		loadGlyph(r)
+		fmt.Println("rune is now:", string(r))
+		bindBuffers()
+	}
 }
 
 var mouseCoord mgl32.Vec2
@@ -635,7 +632,21 @@ func main() {
 	window.SetCursorPosCallback(onCursorPos)
 
 	loadFont("SeoulNamsan-Light.ttf")
-	loadGlyph('께')
+	startTime := glfw.GetTime()
+	prof := profile.Start(profile.CPUProfile)
+	for i := 0; i < 100; i++ {
+		loadGlyph('께')
+		loadGlyph('c')
+		loadGlyph('h')
+		loadGlyph('g')
+		loadGlyph('r')
+		loadGlyph('R')
+		loadGlyph('o')
+		loadGlyph('3')
+		loadGlyph('4')
+	}
+	prof.Stop()
+	fmt.Printf("loadGlyphs took %fms\n", 1e3*(glfw.GetTime()-startTime))
 
 	renderInit()
 
