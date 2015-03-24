@@ -6,9 +6,75 @@ the spatial data structures.
 */
 package cdt
 
+// #cgo CXXFLAGS: -O3 -std=c++11 -Wall -Werror
+// #include <stdlib.h>
+// int triangulate(float left, float right, float bottom, float top,
+//                 int nPoints, float *points, int nEdges, int *edges,
+//                 float *verts, int *srcToDstIs, int *triangles);
+import "C"
+
 import (
+	"fmt"
 	"github.com/go-gl/mathgl/mgl32"
+	"math"
+	"sort"
+	"unsafe"
 )
+
+func Triangulate(left, right, bottom, top float32,
+	points []float32, edges []int32) (verts []float32, srcToDstIs []int32, triangles []int32) {
+
+	cPoints := unsafe.Pointer(C.malloc(C.size_t(len(points) * 4)))
+	for i, f := range points {
+		p := (*float32)(unsafe.Pointer(uintptr(cPoints) + uintptr(i*4)))
+		*p = f
+	}
+	cEdges := unsafe.Pointer(C.malloc(C.size_t(len(points) * 4)))
+	for i, e := range edges {
+		p := (*int32)(unsafe.Pointer(uintptr(cEdges) + uintptr(i*4)))
+		*p = e
+	}
+
+	numPoints := (len(points) / 2) + 4
+	srcToDstIs = make([]int32, len(points)/2)
+	verts = make([]float32, numPoints*2)
+	triangles = make([]int32, 3*(2*numPoints-6))
+	cSrcToDstIs := unsafe.Pointer(C.malloc(C.size_t(len(srcToDstIs) * 4)))
+	cVerts := unsafe.Pointer(C.malloc(C.size_t(len(verts) * 4)))
+	cTriangles := unsafe.Pointer(C.malloc(C.size_t(len(triangles) * 4)))
+	// fmt.Printf("triangulate(%ff, %ff, %ff, %ff, %d, %v, %d, %v, verts, triangles)\n",
+	// 	left, right, bottom, top, len(points)/2, points, len(edges)/2, edges)
+	err := C.triangulate(
+		C.float(left), C.float(right), C.float(bottom), C.float(top),
+		C.int(int32(len(points)/2)), (*C.float)(cPoints),
+		C.int(int32(len(edges)/2)), (*C.int)(cEdges),
+		(*C.float)(cVerts), (*C.int)(cSrcToDstIs), (*C.int)(cTriangles))
+	if err < 0 {
+		panic(fmt.Sprintf("triangulate failed with error %d", err))
+	}
+	C.free(cPoints)
+	C.free(cEdges)
+	for i := 0; i < len(srcToDstIs); i++ {
+		p := (*int32)(unsafe.Pointer(uintptr(cSrcToDstIs) + uintptr(i*4)))
+		srcToDstIs[i] = *p
+	}
+	C.free(cSrcToDstIs)
+	for i := 0; i < len(verts); i++ {
+		p := (*float32)(unsafe.Pointer(uintptr(cVerts) + uintptr(i*4)))
+		verts[i] = *p
+	}
+	C.free(cVerts)
+	for i := 0; i < len(triangles); i++ {
+		p := (*int32)(unsafe.Pointer(uintptr(cTriangles) + uintptr(i*4)))
+		triangles[i] = *p
+	}
+	C.free(cTriangles)
+	// truncate the result, in case of duplicates:
+	numPoints = int(err)
+	verts = verts[:numPoints]
+	triangles = triangles[:3*(numPoints-6)]
+	return verts, srcToDstIs, triangles
+}
 
 type Triangulation struct {
 	Verts []mgl32.Vec2
@@ -18,6 +84,7 @@ type Triangulation struct {
 	Triangles []int
 	// This isn't currently enforced, but could be useful for error checking
 	fixed []bool
+
 	// Used for edge insertion:
 	newTris, newEdges []int
 	checkTris         []int
@@ -84,7 +151,27 @@ func (t *Triangulation) AddPoint(x, y float32) (index int) {
 	found := false
 	parentTriIs := [2]int{-1, -1}
 	parentTriIsIdx := 0
+
+	minVertDist := float32(math.MaxFloat32)
+	minVertI := -1
+	for i := 0; i < t.VertI; i++ {
+		v := pt.Sub(t.Verts[i])
+		vertDist := v[0]*v[0] + v[1]*v[1]
+		if vertDist < minVertDist {
+			minVertI = i
+			minVertDist = vertDist
+		}
+	}
+
+	// note: making this a function to avoid copypasta kills perf
+	// note: just use c
 	for i := 0; i < t.TriangleI; i += 3 {
+		if t.Triangles[i] != minVertI &&
+			t.Triangles[i+1] != minVertI &&
+			t.Triangles[i+2] != minVertI {
+
+			continue
+		}
 		if pointInTriangle(pt,
 			t.Verts[t.Triangles[i]],
 			t.Verts[t.Triangles[i+1]],
@@ -95,6 +182,45 @@ func (t *Triangulation) AddPoint(x, y float32) (index int) {
 				parentTriIsIdx++
 			} else {
 				duplicate = true
+				break
+			}
+		}
+	}
+	if !found {
+		vertDists := make([]float32, t.VertI)
+		sortedVertIs := make([]int, t.VertI)
+		for i := 0; i < t.VertI; i++ {
+			v := pt.Sub(t.Verts[i])
+			vertDists[i] = v[0]*v[0] + v[1]*v[1]
+			sortedVertIs[i] = i
+		}
+		sorter := indexedFloatSorter{vertDists, sortedVertIs, t.VertI}
+		sort.Sort(&sorter)
+
+		for j := 0; j < sorter.l; j++ {
+			n := sorter.is[j]
+			for i := 0; i < t.TriangleI; i += 3 {
+				if t.Triangles[i] != n && t.Triangles[i+1] != n && t.Triangles[i+2] != n {
+					continue
+				}
+				if pointInTriangle(pt,
+					t.Verts[t.Triangles[i]],
+					t.Verts[t.Triangles[i+1]],
+					t.Verts[t.Triangles[i+2]]) {
+					found = true
+					if parentTriIsIdx < 2 {
+						parentTriIs[parentTriIsIdx] = i
+						parentTriIsIdx++
+					} else {
+						duplicate = true
+						break
+					}
+				}
+			}
+			if found {
+				// the first vert that has any tris containing us will have all
+				// the tris
+				break
 			}
 		}
 	}
@@ -197,8 +323,8 @@ func (t *Triangulation) AddPoint(x, y float32) (index int) {
 		t.fixed[fixedI+1] = false
 		t.fixed[fixedI+2] = false
 		t.checkTris[t.checkTriI+0] = triI
-		t.checkTris[t.checkTriI+2] = t.TriangleI
-		t.checkTris[t.checkTriI+3] = t.TriangleI + 3
+		t.checkTris[t.checkTriI+1] = t.TriangleI
+		t.checkTris[t.checkTriI+2] = t.TriangleI + 3
 		t.TriangleI += 6
 		t.EdgeI += 6
 		t.checkTriI += 3
@@ -609,4 +735,27 @@ func pointInTriangle(p, a, b, c mgl32.Vec2) bool {
 func pointInAngle(p, a, b, c mgl32.Vec2) bool {
 	u, v := getBarycentric(p, a, b, c)
 	return u >= -4e-6 && v >= -4e-6
+}
+
+type indexedFloatSorter struct {
+	fs []float32
+	is []int
+	l  int
+}
+
+func (s *indexedFloatSorter) Len() int {
+	return s.l
+}
+
+func (s *indexedFloatSorter) Less(i, j int) bool {
+	return s.fs[i] < s.fs[j]
+}
+
+func (s *indexedFloatSorter) Swap(i, j int) {
+	idx := s.is[i]
+	s.is[i] = s.is[j]
+	s.is[j] = idx
+	f := s.fs[i]
+	s.fs[i] = s.fs[j]
+	s.fs[j] = f
 }

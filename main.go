@@ -248,20 +248,17 @@ func loadGlyph(r rune) {
 	}
 
 	// tessellate the glyph with CDT:
-	dt := cdt.NewTriangulation(xMin, xMax, yMin, yMax, len(positions)/2)
-	srcToDtIs := []int{}
-	for i := 0; i < len(positions); i += 2 {
-		dtI := dt.AddPoint(positions[i+0], positions[i+1])
-		srcToDtIs = append(srcToDtIs, dtI)
-	}
+	edges := []int32{}
 	for i := 0; i < len(indices); i += 3 {
-		dt.AddEdge(srcToDtIs[int(indices[i+0])], srcToDtIs[int(indices[i+1])])
-		dt.AddEdge(srcToDtIs[int(indices[i+1])], srcToDtIs[int(indices[i+2])])
-		dt.AddEdge(srcToDtIs[int(indices[i+2])], srcToDtIs[int(indices[i+0])])
+		edges = append(edges,
+			int32(indices[i+0]), int32(indices[i+1]),
+			int32(indices[i+1]), int32(indices[i+2]),
+			int32(indices[i+2]), int32(indices[i+0]))
 	}
 	for i := 0; i < len(lines); i += 2 {
-		dt.AddEdge(srcToDtIs[int(lines[i])], srcToDtIs[int(lines[i+1])])
+		edges = append(edges, int32(lines[i]), int32(lines[i+1]))
 	}
+	tVerts, srcToDtIs, tTris := cdt.Triangulate(xMin, xMax, yMin, yMax, positions, edges)
 
 	// determine whether a given point is in or outside the glyph shape
 	pointInGlyph := func(q mgl32.Vec2) bool {
@@ -415,10 +412,10 @@ func loadGlyph(r rune) {
 		return result
 	}
 	// to build final mesh:
-	// iterate over indices, finding the corresponding triangles in dt.Triangles
+	// iterate over indices, finding the corresponding triangles in tTris
 	// insert those triangles with the appropriate uvs as given by uvs, and mark
-	// them as inserted against dt.Triangles
-	// then, iterate over dt.Triangles, for all not-yet-inserted triangles: test
+	// them as inserted against tTris
+	// then, iterate over tTris, for all not-yet-inserted triangles: test
 	// whether triangle center is in the glyph; if so, the triangle uvs should
 	// be [0 1], otherwise the triangle uvs should be [1 0] to compress, scan
 	// glyphMesh for a matching vertex before insertion of a new vertex.
@@ -430,31 +427,31 @@ func loadGlyph(r rune) {
 		triI := -1
 		srcIs := []int{}
 		concave := false
-		for j := 0; j < dt.TriangleI; j += 3 {
+		for j := 0; j < len(tTris); j += 3 {
 			triI = j
-			if dtVI0 == dt.Triangles[j] {
-				if dtVI1 == dt.Triangles[j+1] && dtVI2 == dt.Triangles[j+2] {
+			if dtVI0 == tTris[j] {
+				if dtVI1 == tTris[j+1] && dtVI2 == tTris[j+2] {
 					srcIs = []int{0, 1, 2}
 					break
-				} else if dtVI1 == dt.Triangles[j+2] && dtVI2 == dt.Triangles[j+1] {
+				} else if dtVI1 == tTris[j+2] && dtVI2 == tTris[j+1] {
 					srcIs = []int{0, 2, 1}
 					concave = true
 					break
 				}
-			} else if dtVI0 == dt.Triangles[j+1] {
-				if dtVI1 == dt.Triangles[j+2] && dtVI2 == dt.Triangles[j] {
+			} else if dtVI0 == tTris[j+1] {
+				if dtVI1 == tTris[j+2] && dtVI2 == tTris[j] {
 					srcIs = []int{1, 2, 0}
 					break
-				} else if dtVI1 == dt.Triangles[j] && dtVI2 == dt.Triangles[j+2] {
+				} else if dtVI1 == tTris[j] && dtVI2 == tTris[j+2] {
 					srcIs = []int{1, 0, 2}
 					concave = true
 					break
 				}
-			} else if dtVI0 == dt.Triangles[j+2] {
-				if dtVI1 == dt.Triangles[j] && dtVI2 == dt.Triangles[j+1] {
+			} else if dtVI0 == tTris[j+2] {
+				if dtVI1 == tTris[j] && dtVI2 == tTris[j+1] {
 					srcIs = []int{2, 0, 1}
 					break
-				} else if dtVI1 == dt.Triangles[j+1] && dtVI2 == dt.Triangles[j] {
+				} else if dtVI1 == tTris[j+1] && dtVI2 == tTris[j] {
 					srcIs = []int{2, 1, 0}
 					concave = true
 					break
@@ -470,14 +467,14 @@ func loadGlyph(r rune) {
 			if concave {
 				uv += 3
 			}
-			pos := dt.Verts[dtVIn]
+			pos := mgl32.Vec2{tVerts[dtVIn], tVerts[dtVIn+1]}
 			dstVertI := len(glyphMesh.positions) / 2
 			glyphMesh.positions = append(glyphMesh.positions, pos[0], pos[1])
 			glyphMesh.uvs = append(glyphMesh.uvs, uv)
 			glyphMesh.indices = append(glyphMesh.indices, int16(dstVertI))
 		}
 	}
-	for i := 0; i < dt.TriangleI; i += 3 {
+	for i := 0; i < len(tTris); i += 3 {
 		isSpline := false
 		for _, j := range splineTriangleIs {
 			if j == i {
@@ -488,9 +485,9 @@ func loadGlyph(r rune) {
 		if isSpline {
 			continue
 		}
-		p0 := dt.Verts[dt.Triangles[i]]
-		p1 := dt.Verts[dt.Triangles[i+1]]
-		p2 := dt.Verts[dt.Triangles[i+2]]
+		p0 := mgl32.Vec2{tVerts[tTris[i]], tVerts[tTris[i]+1]}
+		p1 := mgl32.Vec2{tVerts[tTris[i+1]], tVerts[tTris[i+1]+1]}
+		p2 := mgl32.Vec2{tVerts[tTris[i+2]], tVerts[tTris[i+2]+1]}
 		mp := p0.Add(p1).Add(p2).Mul(float32(1) / float32(3))
 		uv := int8(uvExterior)
 		if pointInGlyph(mp) {
@@ -633,6 +630,7 @@ func main() {
 
 	loadFont("SeoulNamsan-Light.ttf")
 	startTime := glfw.GetTime()
+	profile.CPUProfile.ProfilePath = "."
 	prof := profile.Start(profile.CPUProfile)
 	for i := 0; i < 100; i++ {
 		loadGlyph('께')
